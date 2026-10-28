@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import 'models/player.dart';
 import 'services/bluetooth_service.dart';
@@ -24,6 +25,8 @@ class GamePage extends StatefulWidget {
 }
 
 class _GamePageState extends State<GamePage> with SingleTickerProviderStateMixin {
+  static const String _prefsPlayersKey = 'saved_players_names';
+
   late final BluetoothService _bluetoothService;
 
   GameState _gameState = GameState.setup;
@@ -34,9 +37,9 @@ class _GamePageState extends State<GamePage> with SingleTickerProviderStateMixin
 
   int _basePulses = 0;        // Импульсы на момент нажатия "Пуск"
   int _currentPulses = 0;     // Текущие входящие импульсы
-  int? _lastPacketPulses;     // Значение предыдущего полученного пакета для сравнения
+  int? _lastPacketPulses;     // Предыдущий пакет для детекции остановки
 
-  Timer? _safetyTimeoutTimer; // Страховочный таймер отсутствия пакетов (4.5 сек)
+  Timer? _safetyTimeoutTimer;
   Timer? _cooldownTimer;
   int _cooldownSecondsRemaining = 15;
 
@@ -73,6 +76,7 @@ class _GamePageState extends State<GamePage> with SingleTickerProviderStateMixin
       },
     );
 
+    _loadSavedPlayers();
     _bluetoothService.start();
   }
 
@@ -83,6 +87,68 @@ class _GamePageState extends State<GamePage> with SingleTickerProviderStateMixin
     _cooldownTimer?.cancel();
     _bottleAnimController.dispose();
     super.dispose();
+  }
+
+  Future<void> _loadSavedPlayers() async {
+    final prefs = await SharedPreferences.getInstance();
+    final List<String>? savedNames = prefs.getStringList(_prefsPlayersKey);
+
+    if (savedNames != null && savedNames.length >= 2) {
+      final restoredPlayers = _buildPlayersFromNames(savedNames);
+      if (mounted) {
+        setState(() {
+          _players = restoredPlayers;
+          _gameState = GameState.ready;
+        });
+      }
+    }
+  }
+
+  Future<void> _savePlayersToStorage(List<Player> players) async {
+    final prefs = await SharedPreferences.getInstance();
+    final names = players.map((p) => p.name).toList();
+    await prefs.setStringList(_prefsPlayersKey, names);
+  }
+
+  List<Player> _buildPlayersFromNames(List<String> names) {
+    const List<Color> palette = [
+      Colors.green,
+      Colors.redAccent,
+      Colors.blue,
+      Colors.orange,
+      Colors.purple,
+      Colors.amber,
+    ];
+
+    final int count = names.length;
+    List<Color> assignedColors = [];
+
+    for (int i = 0; i < count; i++) {
+      Color candidate = palette[i % palette.length];
+
+      if (i == count - 1 && count > 1) {
+        final Color firstColor = assignedColors[0];
+        final Color prevColor = assignedColors[i - 1];
+
+        if (candidate == firstColor || candidate == prevColor) {
+          for (Color c in palette) {
+            if (c != firstColor && c != prevColor) {
+              candidate = c;
+              break;
+            }
+          }
+        }
+      }
+      assignedColors.add(candidate);
+    }
+
+    return List.generate(count, (index) {
+      return Player(
+        id: index.toString(),
+        name: names[index],
+        color: assignedColors[index],
+      );
+    });
   }
 
   void _handleInboundPulses(int inboundValue) {
@@ -97,7 +163,6 @@ class _GamePageState extends State<GamePage> with SingleTickerProviderStateMixin
     final totalDelta = _currentPulses - _basePulses;
     if (totalDelta <= 0) return;
 
-    // Первый пакет после нажатия "Пуск" и начала вращения
     if (_gameState == GameState.waitingSpin) {
       setState(() {
         _gameState = GameState.spinning;
@@ -107,14 +172,11 @@ class _GamePageState extends State<GamePage> with SingleTickerProviderStateMixin
       return;
     }
 
-    // Состояние активного вращения
     if (_gameState == GameState.spinning) {
       if (_lastPacketPulses != null && _currentPulses == _lastPacketPulses) {
-        // Мгновенная фиксация: пришел точно такой же пакет -> стоп!
         _safetyTimeoutTimer?.cancel();
         _onSpinnerStopped();
       } else {
-        // Число выросло -> спиннер в движении
         setState(() {
           _lastPacketPulses = _currentPulses;
         });
@@ -123,10 +185,8 @@ class _GamePageState extends State<GamePage> with SingleTickerProviderStateMixin
     }
   }
 
-  /// Страховочный таймер на случай, если спиннер уснул или сигнал пропал
   void _armSafetyTimeout() {
     _safetyTimeoutTimer?.cancel();
-    // 3200 мс: чуть больше шага вещания ESP32 (3000 мс)
     _safetyTimeoutTimer = Timer(const Duration(milliseconds: 3200), () {
       if (_gameState == GameState.spinning) {
         _onSpinnerStopped();
@@ -144,7 +204,6 @@ class _GamePageState extends State<GamePage> with SingleTickerProviderStateMixin
       _gameState = GameState.evaluating;
     });
 
-    // Условие: если насчитал менее 21 оборота — победителя нет
     if (totalDelta < 21) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
@@ -160,13 +219,11 @@ class _GamePageState extends State<GamePage> with SingleTickerProviderStateMixin
       return;
     }
 
-    // Вычисляем сектор победителя
     final int count = _players.length;
     final int winIdx = totalDelta % count;
     final double sweep = (2 * math.pi) / count;
     final double targetSectorAngle = (winIdx * sweep) + (sweep / 2);
 
-    // Добавляем 2 полных оборота (4π) для красивого затухающего доворота
     final double finalAngle = _currentBottleAngle +
         (4 * math.pi) +
         (targetSectorAngle - (_currentBottleAngle % (2 * math.pi)));
@@ -223,6 +280,7 @@ class _GamePageState extends State<GamePage> with SingleTickerProviderStateMixin
     );
 
     if (result != null && result.length >= 2) {
+      await _savePlayersToStorage(result);
       setState(() {
         _players = result;
         _gameState = GameState.ready;

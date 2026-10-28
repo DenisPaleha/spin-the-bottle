@@ -12,9 +12,9 @@
 
     <uses-feature android:name="android.hardware.bluetooth_le" android:required="true" />
     <application
-        android:label="spin_the_bottle"
-        android:name="${applicationName}"
-        android:icon="@mipmap/ic_launcher">
+            android:label="Spin The Bottle"
+            android:name="${applicationName}"
+            android:icon="@mipmap/launcher_icon">
         <activity
             android:name=".MainActivity"
             android:exported="true"

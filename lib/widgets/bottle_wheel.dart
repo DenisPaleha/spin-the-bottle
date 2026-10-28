@@ -38,59 +38,10 @@ class BottleWheel extends StatelessWidget {
   }
 
   Widget _buildBottle() {
-    return Container(
-      width: 44,
-      height: 154,
-      decoration: BoxDecoration(
-        color: const Color(0xFF3E2723), // Темное стекло
-        borderRadius: const BorderRadius.vertical(
-          top: Radius.circular(10),
-          bottom: Radius.circular(22),
-        ),
-        boxShadow: const [
-          BoxShadow(
-            color: Colors.black45,
-            blurRadius: 10,
-            offset: Offset(0, 4),
-          ),
-        ],
-      ),
-      child: Column(
-        children: [
-          // Горлышко
-          Container(
-            width: 14,
-            height: 36,
-            decoration: const BoxDecoration(
-              color: Color(0xFF271510),
-              borderRadius: BorderRadius.vertical(top: Radius.circular(6)),
-            ),
-          ),
-          // Золотистая этикетка
-          Expanded(
-            child: Center(
-              child: Container(
-                width: 32,
-                height: 40,
-                decoration: BoxDecoration(
-                  color: Colors.amber.shade100,
-                  borderRadius: BorderRadius.circular(4),
-                ),
-                child: const Center(
-                  child: Text(
-                    '★',
-                    style: TextStyle(
-                      color: Color(0xFF3E2723),
-                      fontSize: 18,
-                      fontWeight: FontWeight.bold,
-                    ),
-                  ),
-                ),
-              ),
-            ),
-          ),
-        ],
-      ),
+    return Image.asset(
+      'assets/RUM.png',
+      height: 160,
+      fit: BoxFit.contain,
     );
   }
 }
