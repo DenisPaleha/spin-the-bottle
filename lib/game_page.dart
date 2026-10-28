@@ -172,9 +172,13 @@ class _GamePageState extends State<GamePage> with TickerProviderStateMixin {
     });
   }
 
-  /// Тап по колесу: звук «Дзинь», 2 оборота и остановка ровно на 12 часах (0 рад)
+  /// Тап по колесу: звук «Дзинь», мгновенный сброс кулдауна, 2 оборота и парковка на 12 часах
   Future<void> _onWheelTapped() async {
-    if (_gameState != GameState.ready) return;
+    // Разрешаем тап как в режиме ожидания, так и во время 15-секундного кулдауна
+    if (_gameState != GameState.ready && _gameState != GameState.cooldown) return;
+
+    // Сбрасываем таймер ожидания раунда
+    _cooldownTimer?.cancel();
 
     try {
       await _audioPlayer.stop();
@@ -209,6 +213,7 @@ class _GamePageState extends State<GamePage> with TickerProviderStateMixin {
       setState(() {
         _bottleAngle = 0.0;
         _winningIndex = null;
+        _gameState = GameState.ready; // Сразу готовы к новому запуску спиннера
       });
     });
   }
@@ -218,7 +223,7 @@ class _GamePageState extends State<GamePage> with TickerProviderStateMixin {
 
     _currentPulses = inboundValue;
 
-    // Первичная калибровка: если это первый прилетевший пакет в сессии, берем его за ноль
+    // Первичная калибровка при холодном старте
     if (!_isBleCalibrated) {
       _basePulses = _currentPulses;
       _lastPacketPulses = _currentPulses;
@@ -233,12 +238,11 @@ class _GamePageState extends State<GamePage> with TickerProviderStateMixin {
           _gameState = GameState.spinning;
           _winningIndex = null;
           _lastPacketPulses = _currentPulses;
-          _angularVelocity = 28.0; // Сразу резкий старт
-          _targetVelocity = 28.0;  // Быстрое вращение
+          _angularVelocity = 28.0;
+          _targetVelocity = 28.0;
         });
         _armSafetyTimeout();
       } else {
-        // Спиннер неподвижен — держим базу актуальной
         _basePulses = _currentPulses;
       }
       return;
@@ -249,31 +253,34 @@ class _GamePageState extends State<GamePage> with TickerProviderStateMixin {
       final totalDelta = _currentPulses - _basePulses;
       if (totalDelta <= 0) return;
 
+      // МГНОВЕННАЯ ОСТАНОВКА: пришел дубликат пакета -> спиннер встал
       if (_lastPacketPulses != null && _currentPulses == _lastPacketPulses) {
-        // Два идентичных значения -> спиннер остановился
         _safetyTimeoutTimer?.cancel();
         _onSpinnerStopped();
-      } else {
-        final int stepDelta = (_lastPacketPulses != null)
-            ? (_currentPulses - _lastPacketPulses!)
-            : totalDelta;
-
-        // Плавная регулировка целевой скорости в зависимости от темпа импульсов
-        if (stepDelta >= 20) {
-          _targetVelocity = 28.0; // Быстро
-        } else if (stepDelta >= 10) {
-          _targetVelocity = 18.0; // Средне
-        } else if (stepDelta >= 4) {
-          _targetVelocity = 9.0;  // Замедление
-        } else {
-          _targetVelocity = 4.0;  // Почти ползет
-        }
-
-        setState(() {
-          _lastPacketPulses = _currentPulses;
-        });
-        _armSafetyTimeout();
+        return;
       }
+
+      // Вычисляем дельту импульсов между соседними пакетами для контроля скорости
+      final int stepDelta = (_lastPacketPulses != null)
+          ? (_currentPulses - _lastPacketPulses!)
+          : totalDelta;
+
+      if (stepDelta >= 20) {
+        _targetVelocity = 28.0; // Максимальная скорость
+      } else if (stepDelta >= 10) {
+        _targetVelocity = 16.0; // Средний темп
+      } else if (stepDelta >= 4) {
+        _targetVelocity = 7.0;  // Заметное замедление
+      } else {
+        _targetVelocity = 2.5;  // Финальный выбег по инерции
+      }
+
+      setState(() {
+        _lastPacketPulses = _currentPulses;
+      });
+
+      // Страховочный таймер держим только на случай потери радиосвязи в полете
+      _armSafetyTimeout();
     }
   }
 
@@ -314,7 +321,7 @@ class _GamePageState extends State<GamePage> with TickerProviderStateMixin {
       return;
     }
 
-    // Расчет победителя
+    // Расчет сектора победителя
     final int count = _players.length;
     final int winIdx = totalDelta % count;
     final double sweep = (2 * math.pi) / count;
@@ -323,19 +330,25 @@ class _GamePageState extends State<GamePage> with TickerProviderStateMixin {
     final double start = _bottleAngle;
     final double norm = start % (2 * math.pi);
     double diff = targetSectorAngle - norm;
-    if (diff < 0) diff += 2 * math.pi;
+    if (diff < 0) {
+      diff += 2 * math.pi;
+    }
 
-    // Мягкий финальный выбег (ровно 1 круг запаса + угол до сектора)
-    final double finalTarget = start + (2 * math.pi) + diff;
+    // Если угол до сектора совсем крошечный, даем один красивый круг на затухание
+    final double crawlAngle = (diff < 0.4) ? (diff + 2 * math.pi) : diff;
+    final double finalTarget = start + crawlAngle;
+
+    // Время доползания подстраивается под оставшийся угол (без рывка)
+    final int durationMs = (1000 + (crawlAngle / (2 * math.pi) * 1200)).round();
 
     _settleAnimController?.dispose();
     _settleAnimController = AnimationController(
       vsync: this,
-      duration: const Duration(milliseconds: 1600),
+      duration: Duration(milliseconds: durationMs),
     );
 
     _settleAnimation = Tween<double>(begin: start, end: finalTarget).animate(
-      CurvedAnimation(parent: _settleAnimController!, curve: Curves.easeOutCubic),
+      CurvedAnimation(parent: _settleAnimController!, curve: Curves.easeOutQuad),
     )..addListener(() {
       setState(() {
         _bottleAngle = _settleAnimation!.value;
