@@ -17,14 +17,13 @@ class _PlayerInputDialogState extends State<PlayerInputDialog> {
   final TextEditingController _nameController = TextEditingController();
   final List<String> _playerNames = [];
 
-  // 6 базовых сочных цветов (Lego / филамент)
   static const List<Color> _palette = [
-    Colors.green,        // 0: Зеленый
-    Colors.redAccent,    // 1: Красный
-    Colors.blue,         // 2: Синий
-    Colors.orange,       // 3: Оранжевый
-    Colors.purple,       // 4: Фиолетовый
-    Colors.amber,        // 5: Желтый
+    Colors.green,
+    Colors.redAccent,
+    Colors.blue,
+    Colors.orange,
+    Colors.purple,
+    Colors.amber,
   ];
 
   @override
@@ -39,8 +38,6 @@ class _PlayerInputDialogState extends State<PlayerInputDialog> {
     super.dispose();
   }
 
-  /// Назначает цвета всем игрокам так, чтобы ни у кого из соседей по кругу
-  /// (включая первого и последнего) цвет не совпадал.
   List<Player> _buildBalancedPlayers() {
     final int count = _playerNames.length;
     if (count == 0) return [];
@@ -50,12 +47,10 @@ class _PlayerInputDialogState extends State<PlayerInputDialog> {
     for (int i = 0; i < count; i++) {
       Color candidate = _palette[i % _palette.length];
 
-      // Проверка для самого последнего участника: он граничит и с (count - 2), и с 0
       if (i == count - 1 && count > 1) {
         final Color firstColor = assignedColors[0];
         final Color prevColor = assignedColors[i - 1];
 
-        // Если цвет совпадает с первым или предыдущим - берем первый подходящий из палитры
         if (candidate == firstColor || candidate == prevColor) {
           for (Color c in _palette) {
             if (c != firstColor && c != prevColor) {
@@ -83,7 +78,8 @@ class _PlayerInputDialogState extends State<PlayerInputDialog> {
     if (name.isEmpty) return;
 
     setState(() {
-      _playerNames.add(name);
+      // Вставляем новое имя на первое место, чтобы старые уходили вниз
+      _playerNames.insert(0, name);
       _nameController.clear();
     });
   }
@@ -100,63 +96,68 @@ class _PlayerInputDialogState extends State<PlayerInputDialog> {
 
     return AlertDialog(
       title: const Text('Участники игры'),
-      content: SizedBox(
-        width: double.maxFinite,
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Row(
-              children: [
-                Expanded(
-                  child: TextField(
-                    controller: _nameController,
-                    decoration: const InputDecoration(
-                      labelText: 'Имя игрока',
-                      hintText: 'Введите имя',
+      content: SingleChildScrollView(
+        child: SizedBox(
+          width: double.maxFinite,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Row(
+                children: [
+                  Expanded(
+                    child: TextField(
+                      controller: _nameController,
+                      autofocus: true,
+                      textCapitalization: TextCapitalization.sentences,
+                      decoration: const InputDecoration(
+                        labelText: 'Имя игрока',
+                        hintText: 'Введите имя',
+                      ),
+                      onSubmitted: (_) => _addPlayer(),
                     ),
-                    onSubmitted: (_) => _addPlayer(),
                   ),
-                ),
-                IconButton(
-                  icon: const Icon(Icons.add_circle, color: Colors.blue, size: 32),
-                  onPressed: _addPlayer,
-                ),
-              ],
-            ),
-            const SizedBox(height: 16),
-            ConstrainedBox(
-              constraints: const BoxConstraints(maxHeight: 250),
-              child: currentPlayers.isEmpty
-                  ? const Center(
-                child: Text(
-                  'Добавьте минимум 2 игроков',
-                  style: TextStyle(color: Colors.grey),
-                ),
-              )
-                  : ListView.builder(
-                shrinkWrap: true,
-                itemCount: currentPlayers.length,
-                itemBuilder: (context, index) {
-                  final player = currentPlayers[index];
-                  return ListTile(
-                    dense: true,
-                    leading: CircleAvatar(
-                      backgroundColor: player.color,
-                      radius: 12,
-                    ),
-                    title: Text(
-                      player.name,
-                      style: const TextStyle(fontWeight: FontWeight.bold),
-                    ),
-                    trailing: IconButton(
-                      icon: const Icon(Icons.delete_outline, color: Colors.redAccent),
-                      onPressed: () => _removePlayer(index),
-                    ),
-                  );
-                },
+                  IconButton(
+                    icon: const Icon(Icons.add_circle, color: Colors.blue, size: 32),
+                    onPressed: _addPlayer,
+                  ),
+                ],
               ),
-            ),
-          ],
+              const SizedBox(height: 12),
+              if (currentPlayers.isEmpty)
+                const Padding(
+                  padding: EdgeInsets.symmetric(vertical: 24.0),
+                  child: Text(
+                    'Добавьте минимум 2 игроков',
+                    style: TextStyle(color: Colors.grey),
+                  ),
+                )
+              else
+                ListView.builder(
+                  shrinkWrap: true,
+                  physics: const NeverScrollableScrollPhysics(),
+                  itemCount: currentPlayers.length,
+                  itemBuilder: (context, index) {
+                    final player = currentPlayers[index];
+                    return ListTile(
+                      dense: true,
+                      contentPadding: EdgeInsets.zero,
+                      leading: CircleAvatar(
+                        backgroundColor: player.color,
+                        radius: 12,
+                      ),
+                      title: Text(
+                        player.name,
+                        style: const TextStyle(fontWeight: FontWeight.bold),
+                      ),
+                      trailing: IconButton(
+                        icon: const Icon(Icons.delete_outline, color: Colors.redAccent),
+                        onPressed: () => _removePlayer(index),
+                      ),
+                    );
+                  },
+                ),
+            ],
+          ),
         ),
       ),
       actions: [

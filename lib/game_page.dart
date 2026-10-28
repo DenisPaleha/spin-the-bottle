@@ -1,6 +1,9 @@
 import 'dart:async';
 import 'dart:math' as math;
+import 'package:audioplayers/audioplayers.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/scheduler.dart';
+import 'package:package_info_plus/package_info_plus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'models/player.dart';
@@ -9,12 +12,11 @@ import 'widgets/bottle_wheel.dart';
 import 'widgets/player_input_dialog.dart';
 
 enum GameState {
-  setup,        // Ввод игроков
-  ready,        // Ждем нажатия "Пуск"
-  waitingSpin,  // "Крутите!" (ждем начала вращения)
-  spinning,     // Спиннер вращается
-  evaluating,   // Остановка и показ результата
-  cooldown,     // 15 секунд отдыха перед новым раундом
+  setup,
+  ready,
+  spinning,
+  evaluating,
+  cooldown,
 }
 
 class GamePage extends StatefulWidget {
@@ -24,48 +26,56 @@ class GamePage extends StatefulWidget {
   State<GamePage> createState() => _GamePageState();
 }
 
-class _GamePageState extends State<GamePage> with SingleTickerProviderStateMixin {
+class _GamePageState extends State<GamePage> with TickerProviderStateMixin {
   static const String _prefsPlayersKey = 'saved_players_names';
 
   late final BluetoothService _bluetoothService;
+  late final AudioPlayer _audioPlayer;
 
   GameState _gameState = GameState.setup;
   String _bleStatus = "Поиск эфира...";
+  String _appVersion = '';
 
   List<Player> _players = [];
   int? _winningIndex;
 
-  int _basePulses = 0;        // Импульсы на момент нажатия "Пуск"
-  int _currentPulses = 0;     // Текущие входящие импульсы
-  int? _lastPacketPulses;     // Предыдущий пакет для детекции остановки
+  bool _isBleCalibrated = false; // Защита от огромного первого пакета
+  int _basePulses = 0;
+  int _currentPulses = 0;
+  int? _lastPacketPulses;
 
   Timer? _safetyTimeoutTimer;
   Timer? _cooldownTimer;
   int _cooldownSecondsRemaining = 15;
 
-  late AnimationController _bottleAnimController;
-  late Animation<double> _bottleAnimation;
-  double _currentBottleAngle = 0.0;
+  // Непрерывный тикер для свободного физического вращения
+  late final Ticker _physicsTicker;
+  double _bottleAngle = 0.0;
+  double _angularVelocity = 0.0; // рад/с
+  double _targetVelocity = 0.0;
+
+  // Анимация фиксации на победителе и возврата на 12 часов
+  AnimationController? _settleAnimController;
+  Animation<double>? _settleAnimation;
 
   @override
   void initState() {
     super.initState();
 
-    _bottleAnimController = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 1600),
-    );
+    _audioPlayer = AudioPlayer();
+    _loadAppVersion();
 
-    _bottleAnimation = CurvedAnimation(
-      parent: _bottleAnimController,
-      curve: Curves.easeOutCubic,
-    );
-
-    _bottleAnimation.addListener(() {
-      setState(() {
-        _currentBottleAngle = _bottleAnimation.value;
-      });
+    // Тикер обновляет угол вращения каждый кадр экрана (60/120 fps)
+    _physicsTicker = createTicker((elapsed) {
+      if (_gameState == GameState.spinning) {
+        // Плавная интерполяция текущей скорости к целевой
+        _angularVelocity += (_targetVelocity - _angularVelocity) * 0.08;
+        setState(() {
+          _bottleAngle = (_bottleAngle + _angularVelocity * 0.016) % (2 * math.pi);
+        });
+      }
     });
+    _physicsTicker.start();
 
     _bluetoothService = BluetoothService(
       onStatusChanged: (status) {
@@ -82,11 +92,22 @@ class _GamePageState extends State<GamePage> with SingleTickerProviderStateMixin
 
   @override
   void dispose() {
+    _physicsTicker.dispose();
     _bluetoothService.dispose();
+    _audioPlayer.dispose();
     _safetyTimeoutTimer?.cancel();
     _cooldownTimer?.cancel();
-    _bottleAnimController.dispose();
+    _settleAnimController?.dispose();
     super.dispose();
+  }
+
+  Future<void> _loadAppVersion() async {
+    final packageInfo = await PackageInfo.fromPlatform();
+    if (mounted) {
+      setState(() {
+        _appVersion = 'v ${packageInfo.version}';
+      });
+    }
   }
 
   Future<void> _loadSavedPlayers() async {
@@ -151,32 +172,103 @@ class _GamePageState extends State<GamePage> with SingleTickerProviderStateMixin
     });
   }
 
+  /// Тап по колесу: звук «Дзинь», 2 оборота и остановка ровно на 12 часах (0 рад)
+  Future<void> _onWheelTapped() async {
+    if (_gameState != GameState.ready) return;
+
+    try {
+      await _audioPlayer.stop();
+      await _audioPlayer.play(AssetSource('glass.mp3'));
+    } catch (_) {}
+
+    _basePulses = _currentPulses;
+    _lastPacketPulses = null;
+    _angularVelocity = 0.0;
+    _targetVelocity = 0.0;
+
+    final double start = _bottleAngle;
+    final double norm = start % (2 * math.pi);
+    final double target = start + (4 * math.pi) + ((2 * math.pi) - norm);
+
+    _settleAnimController?.dispose();
+    _settleAnimController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 700),
+    );
+
+    _settleAnimation = Tween<double>(begin: start, end: target).animate(
+      CurvedAnimation(parent: _settleAnimController!, curve: Curves.easeOutCubic),
+    )..addListener(() {
+      setState(() {
+        _bottleAngle = _settleAnimation!.value;
+      });
+    });
+
+    _settleAnimController!.forward().then((_) {
+      if (!mounted) return;
+      setState(() {
+        _bottleAngle = 0.0;
+        _winningIndex = null;
+      });
+    });
+  }
+
   void _handleInboundPulses(int inboundValue) {
     if (!mounted) return;
 
     _currentPulses = inboundValue;
 
-    if (_gameState != GameState.waitingSpin && _gameState != GameState.spinning) {
+    // Первичная калибровка: если это первый прилетевший пакет в сессии, берем его за ноль
+    if (!_isBleCalibrated) {
+      _basePulses = _currentPulses;
+      _lastPacketPulses = _currentPulses;
+      _isBleCalibrated = true;
       return;
     }
 
-    final totalDelta = _currentPulses - _basePulses;
-    if (totalDelta <= 0) return;
-
-    if (_gameState == GameState.waitingSpin) {
-      setState(() {
-        _gameState = GameState.spinning;
-        _lastPacketPulses = _currentPulses;
-      });
-      _armSafetyTimeout();
+    // Состояние готовности: ждем физического запуска спиннера
+    if (_gameState == GameState.ready) {
+      if (_players.length >= 2 && _currentPulses > _basePulses) {
+        setState(() {
+          _gameState = GameState.spinning;
+          _winningIndex = null;
+          _lastPacketPulses = _currentPulses;
+          _angularVelocity = 28.0; // Сразу резкий старт
+          _targetVelocity = 28.0;  // Быстрое вращение
+        });
+        _armSafetyTimeout();
+      } else {
+        // Спиннер неподвижен — держим базу актуальной
+        _basePulses = _currentPulses;
+      }
       return;
     }
 
+    // Состояние вращения
     if (_gameState == GameState.spinning) {
+      final totalDelta = _currentPulses - _basePulses;
+      if (totalDelta <= 0) return;
+
       if (_lastPacketPulses != null && _currentPulses == _lastPacketPulses) {
+        // Два идентичных значения -> спиннер остановился
         _safetyTimeoutTimer?.cancel();
         _onSpinnerStopped();
       } else {
+        final int stepDelta = (_lastPacketPulses != null)
+            ? (_currentPulses - _lastPacketPulses!)
+            : totalDelta;
+
+        // Плавная регулировка целевой скорости в зависимости от темпа импульсов
+        if (stepDelta >= 20) {
+          _targetVelocity = 28.0; // Быстро
+        } else if (stepDelta >= 10) {
+          _targetVelocity = 18.0; // Средне
+        } else if (stepDelta >= 4) {
+          _targetVelocity = 9.0;  // Замедление
+        } else {
+          _targetVelocity = 4.0;  // Почти ползет
+        }
+
         setState(() {
           _lastPacketPulses = _currentPulses;
         });
@@ -197,6 +289,7 @@ class _GamePageState extends State<GamePage> with SingleTickerProviderStateMixin
   void _onSpinnerStopped() {
     if (!mounted) return;
     _safetyTimeoutTimer?.cancel();
+    _targetVelocity = 0.0;
 
     final totalDelta = _currentPulses - _basePulses;
 
@@ -214,28 +307,45 @@ class _GamePageState extends State<GamePage> with SingleTickerProviderStateMixin
       );
       setState(() {
         _gameState = GameState.ready;
+        _basePulses = _currentPulses;
         _lastPacketPulses = null;
+        _angularVelocity = 0.0;
       });
       return;
     }
 
+    // Расчет победителя
     final int count = _players.length;
     final int winIdx = totalDelta % count;
     final double sweep = (2 * math.pi) / count;
     final double targetSectorAngle = (winIdx * sweep) + (sweep / 2);
 
-    final double finalAngle = _currentBottleAngle +
-        (4 * math.pi) +
-        (targetSectorAngle - (_currentBottleAngle % (2 * math.pi)));
+    final double start = _bottleAngle;
+    final double norm = start % (2 * math.pi);
+    double diff = targetSectorAngle - norm;
+    if (diff < 0) diff += 2 * math.pi;
 
-    _bottleAnimation = Tween<double>(
-      begin: _currentBottleAngle,
-      end: finalAngle,
-    ).animate(CurvedAnimation(parent: _bottleAnimController, curve: Curves.easeOutCubic));
+    // Мягкий финальный выбег (ровно 1 круг запаса + угол до сектора)
+    final double finalTarget = start + (2 * math.pi) + diff;
 
-    _bottleAnimController.forward(from: 0.0).then((_) {
+    _settleAnimController?.dispose();
+    _settleAnimController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 1600),
+    );
+
+    _settleAnimation = Tween<double>(begin: start, end: finalTarget).animate(
+      CurvedAnimation(parent: _settleAnimController!, curve: Curves.easeOutCubic),
+    )..addListener(() {
+      setState(() {
+        _bottleAngle = _settleAnimation!.value;
+      });
+    });
+
+    _settleAnimController!.forward().then((_) {
       if (!mounted) return;
       setState(() {
+        _bottleAngle = targetSectorAngle;
         _winningIndex = winIdx;
         _startCooldownTimer();
       });
@@ -256,19 +366,12 @@ class _GamePageState extends State<GamePage> with SingleTickerProviderStateMixin
         if (_cooldownSecondsRemaining <= 0) {
           timer.cancel();
           _gameState = GameState.ready;
+          _basePulses = _currentPulses;
           _lastPacketPulses = null;
           _winningIndex = null;
+          _angularVelocity = 0.0;
         }
       });
-    });
-  }
-
-  void _onStartButtonPressed() {
-    setState(() {
-      _basePulses = _currentPulses;
-      _lastPacketPulses = null;
-      _winningIndex = null;
-      _gameState = GameState.waitingSpin;
     });
   }
 
@@ -286,6 +389,7 @@ class _GamePageState extends State<GamePage> with SingleTickerProviderStateMixin
         _gameState = GameState.ready;
         _winningIndex = null;
         _lastPacketPulses = null;
+        _basePulses = _currentPulses;
       });
     }
   }
@@ -294,7 +398,24 @@ class _GamePageState extends State<GamePage> with SingleTickerProviderStateMixin
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Spin the Bottle'),
+        title: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Text(
+              'Spin the Bottle',
+              style: TextStyle(fontWeight: FontWeight.bold),
+            ),
+            if (_appVersion.isNotEmpty)
+              Text(
+                _appVersion,
+                style: const TextStyle(
+                  fontSize: 12,
+                  color: Colors.grey,
+                  fontWeight: FontWeight.normal,
+                ),
+              ),
+          ],
+        ),
         centerTitle: true,
         actions: [
           IconButton(
@@ -310,7 +431,7 @@ class _GamePageState extends State<GamePage> with SingleTickerProviderStateMixin
         child: Column(
           children: [
             Padding(
-              padding: const EdgeInsets.all(8.0),
+              padding: const EdgeInsets.symmetric(vertical: 8.0),
               child: Text(
                 _bleStatus,
                 style: const TextStyle(fontSize: 13, color: Colors.blueGrey),
@@ -334,54 +455,68 @@ class _GamePageState extends State<GamePage> with SingleTickerProviderStateMixin
                 )
                     : Padding(
                   padding: const EdgeInsets.symmetric(horizontal: 20),
-                  child: BottleWheel(
-                    players: _players,
-                    currentAngle: _currentBottleAngle,
-                    winningPlayerIndex: _winningIndex,
+                  child: GestureDetector(
+                    onTap: _onWheelTapped,
+                    behavior: HitTestBehavior.opaque,
+                    child: BottleWheel(
+                      players: _players,
+                      currentAngle: _bottleAngle,
+                      winningPlayerIndex: _winningIndex,
+                    ),
                   ),
                 ),
               ),
             ),
-            _buildBottomControls(),
-            const SizedBox(height: 24),
+            // Фиксированная высота блока: колесо никогда не скачет
+            SizedBox(
+              height: 96,
+              child: Center(child: _buildBottomStatusArea()),
+            ),
+            const SizedBox(height: 16),
           ],
         ),
       ),
     );
   }
 
-  Widget _buildBottomControls() {
+  Widget _buildBottomStatusArea() {
     if (_players.length < 2) return const SizedBox.shrink();
 
     switch (_gameState) {
       case GameState.ready:
-        return ElevatedButton(
-          onPressed: _onStartButtonPressed,
-          style: ElevatedButton.styleFrom(
-            backgroundColor: Colors.green,
-            padding: const EdgeInsets.symmetric(horizontal: 50, vertical: 16),
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(30)),
-          ),
-          child: const Text(
-            'ПУСК',
-            style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: Colors.white),
-          ),
+        return const Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Text(
+              'Крутите спиннер!',
+              style: TextStyle(
+                fontSize: 24,
+                fontWeight: FontWeight.bold,
+                color: Colors.green,
+              ),
+            ),
+            SizedBox(height: 4),
+            Text(
+              'или нажмите на диск для сброса',
+              style: TextStyle(fontSize: 14, color: Colors.grey),
+            ),
+          ],
         );
 
-      case GameState.waitingSpin:
       case GameState.spinning:
         final currentDelta = math.max(0, _currentPulses - _basePulses);
         return Column(
+          mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Text(
-              _gameState == GameState.waitingSpin ? 'Крутите!' : 'Вращается...',
-              style: const TextStyle(
+            const Text(
+              'Вращается...',
+              style: TextStyle(
                 fontSize: 26,
                 fontWeight: FontWeight.bold,
                 color: Colors.deepOrange,
               ),
             ),
-            const SizedBox(height: 8),
+            const SizedBox(height: 4),
             Text(
               'Оборотов: $currentDelta',
               style: const TextStyle(fontSize: 18, color: Colors.grey),
@@ -396,6 +531,7 @@ class _GamePageState extends State<GamePage> with SingleTickerProviderStateMixin
             : '';
 
         return Column(
+          mainAxisAlignment: MainAxisAlignment.center,
           children: [
             if (_winningIndex != null) ...[
               Text(
@@ -406,7 +542,7 @@ class _GamePageState extends State<GamePage> with SingleTickerProviderStateMixin
                   color: _players[_winningIndex!].color,
                 ),
               ),
-              const SizedBox(height: 8),
+              const SizedBox(height: 4),
             ],
             Text(
               'Следующий раунд через: $_cooldownSecondsRemaining с',
