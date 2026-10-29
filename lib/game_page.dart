@@ -36,7 +36,7 @@ class _GamePageState extends State<GamePage> with TickerProviderStateMixin {
   late final AudioPlayer _audioPlayer;
 
   GameState _gameState = GameState.setup;
-  String _bleStatus = "Поиск эфира...";
+  String _bleStatus = "Scanning for spinner...";
   String _appVersion = '';
 
   List<Player> _players = [];
@@ -306,7 +306,7 @@ class _GamePageState extends State<GamePage> with TickerProviderStateMixin {
           .showSnackBar(
         SnackBar(
           content: Text(
-            'Крутите сильнее! Всего $totalDelta об. (нужно ≥ 21)',
+            'Spin harder! Only $totalDelta revs (need ≥ 21)',
             style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.white),
           ),
           backgroundColor: _brandBlue,
@@ -421,6 +421,9 @@ class _GamePageState extends State<GamePage> with TickerProviderStateMixin {
 
   @override
   Widget build(BuildContext context) {
+    final bool canEditPlayers =
+        _gameState == GameState.ready || _gameState == GameState.setup || _gameState == GameState.cooldown;
+
     return Scaffold(
       appBar: AppBar(
         title: Column(
@@ -445,26 +448,22 @@ class _GamePageState extends State<GamePage> with TickerProviderStateMixin {
           ],
         ),
         centerTitle: true,
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.group_add),
-            tooltip: 'Настроить игроков',
-            onPressed: (_gameState == GameState.ready || _gameState == GameState.setup)
-                ? _openPlayerDialog
-                : null,
-          ),
-        ],
       ),
       body: SafeArea(
         child: Column(
           children: [
-            Padding(
-              padding: const EdgeInsets.symmetric(vertical: 8.0),
-              child: Text(
-                _bleStatus,
-                style: const TextStyle(fontSize: 13, color: Colors.blueGrey),
-                textAlign: TextAlign.center,
-              ),
+            const SizedBox(height: 8),
+            Text(
+              _bleStatus,
+              style: const TextStyle(fontSize: 13, color: Colors.blueGrey),
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: 8),
+            // Иконка настройки участников по центру под статусной строкой
+            IconButton(
+              icon: const Icon(Icons.group_add, color: _brandBlue, size: 28),
+              tooltip: 'Manage Players',
+              onPressed: canEditPlayers ? _openPlayerDialog : null,
             ),
             Expanded(
               child: Center(
@@ -477,7 +476,7 @@ class _GamePageState extends State<GamePage> with TickerProviderStateMixin {
                     ElevatedButton.icon(
                       onPressed: _openPlayerDialog,
                       icon: const Icon(Icons.add),
-                      label: const Text('Добавить участников'),
+                      label: const Text('Add Players'),
                     ),
                   ],
                 )
@@ -515,7 +514,7 @@ class _GamePageState extends State<GamePage> with TickerProviderStateMixin {
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
             Text(
-              'Крутите спиннер!',
+              'Spin the spinner!',
               style: TextStyle(
                 fontSize: 24,
                 fontWeight: FontWeight.bold,
@@ -524,7 +523,7 @@ class _GamePageState extends State<GamePage> with TickerProviderStateMixin {
             ),
             SizedBox(height: 4),
             Text(
-              'или нажмите на диск для сброса',
+              'or tap the wheel to reset',
               style: TextStyle(fontSize: 14, color: Colors.grey),
             ),
           ],
@@ -536,7 +535,7 @@ class _GamePageState extends State<GamePage> with TickerProviderStateMixin {
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
             const Text(
-              'Вращается...',
+              'Spinning...',
               style: TextStyle(
                 fontSize: 26,
                 fontWeight: FontWeight.bold,
@@ -545,7 +544,7 @@ class _GamePageState extends State<GamePage> with TickerProviderStateMixin {
             ),
             const SizedBox(height: 4),
             Text(
-              'Оборотов: $currentDelta',
+              'Revolutions: $currentDelta',
               style: const TextStyle(fontSize: 18, color: Colors.grey),
             ),
           ],
@@ -562,7 +561,7 @@ class _GamePageState extends State<GamePage> with TickerProviderStateMixin {
           children: [
             if (_winningIndex != null) ...[
               Text(
-                'Выбрано: $winnerName!',
+                'Selected: $winnerName!',
                 style: TextStyle(
                   fontSize: 24,
                   fontWeight: FontWeight.bold,
@@ -572,7 +571,7 @@ class _GamePageState extends State<GamePage> with TickerProviderStateMixin {
               const SizedBox(height: 4),
             ],
             Text(
-              'Следующий раунд: $_cooldownSecondsRemaining с (или нажмите диск)',
+              'Next round in: ${_cooldownSecondsRemaining}s (or tap wheel)',
               style: const TextStyle(fontSize: 14, color: Colors.blueGrey),
             ),
           ],

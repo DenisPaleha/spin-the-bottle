@@ -78,7 +78,6 @@ class _PlayerInputDialogState extends State<PlayerInputDialog> {
     if (name.isEmpty) return;
 
     setState(() {
-      // Вставляем новое имя на первое место, чтобы старые уходили вниз
       _playerNames.insert(0, name);
       _nameController.clear();
     });
@@ -95,7 +94,7 @@ class _PlayerInputDialogState extends State<PlayerInputDialog> {
     final currentPlayers = _buildBalancedPlayers();
 
     return AlertDialog(
-      title: const Text('Участники игры'),
+      title: const Text('Players'),
       content: SingleChildScrollView(
         child: SizedBox(
           width: double.maxFinite,
@@ -110,8 +109,8 @@ class _PlayerInputDialogState extends State<PlayerInputDialog> {
                       autofocus: true,
                       textCapitalization: TextCapitalization.sentences,
                       decoration: const InputDecoration(
-                        labelText: 'Имя игрока',
-                        hintText: 'Введите имя',
+                        labelText: 'Player Name',
+                        hintText: 'Enter name',
                       ),
                       onSubmitted: (_) => _addPlayer(),
                     ),
@@ -127,7 +126,7 @@ class _PlayerInputDialogState extends State<PlayerInputDialog> {
                 const Padding(
                   padding: EdgeInsets.symmetric(vertical: 24.0),
                   child: Text(
-                    'Добавьте минимум 2 игроков',
+                    'Add at least 2 players',
                     style: TextStyle(color: Colors.grey),
                   ),
                 )
@@ -163,13 +162,13 @@ class _PlayerInputDialogState extends State<PlayerInputDialog> {
       actions: [
         TextButton(
           onPressed: () => Navigator.of(context).pop(),
-          child: const Text('Отмена'),
+          child: const Text('Cancel'),
         ),
         ElevatedButton(
           onPressed: currentPlayers.length >= 2
               ? () => Navigator.of(context).pop(currentPlayers)
               : null,
-          child: const Text('Готово'),
+          child: const Text('Done'),
         ),
       ],
     );
