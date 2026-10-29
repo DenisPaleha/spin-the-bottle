@@ -29,6 +29,9 @@ class GamePage extends StatefulWidget {
 class _GamePageState extends State<GamePage> with TickerProviderStateMixin {
   static const String _prefsPlayersKey = 'saved_players_names';
 
+  // Фирменный синий цвет колеса и корпуса девайса
+  static const Color _brandBlue = Colors.blue;
+
   late final BluetoothService _bluetoothService;
   late final AudioPlayer _audioPlayer;
 
@@ -39,7 +42,7 @@ class _GamePageState extends State<GamePage> with TickerProviderStateMixin {
   List<Player> _players = [];
   int? _winningIndex;
 
-  bool _isBleCalibrated = false; // Защита от огромного первого пакета
+  bool _isBleCalibrated = false;
   int _basePulses = 0;
   int _currentPulses = 0;
   int? _lastPacketPulses;
@@ -48,13 +51,11 @@ class _GamePageState extends State<GamePage> with TickerProviderStateMixin {
   Timer? _cooldownTimer;
   int _cooldownSecondsRemaining = 15;
 
-  // Непрерывный тикер для свободного физического вращения
   late final Ticker _physicsTicker;
   double _bottleAngle = 0.0;
-  double _angularVelocity = 0.0; // рад/с
+  double _angularVelocity = 0.0;
   double _targetVelocity = 0.0;
 
-  // Анимация фиксации на победителе и возврата на 12 часов
   AnimationController? _settleAnimController;
   Animation<double>? _settleAnimation;
 
@@ -65,10 +66,8 @@ class _GamePageState extends State<GamePage> with TickerProviderStateMixin {
     _audioPlayer = AudioPlayer();
     _loadAppVersion();
 
-    // Тикер обновляет угол вращения каждый кадр экрана (60/120 fps)
     _physicsTicker = createTicker((elapsed) {
       if (_gameState == GameState.spinning) {
-        // Плавная интерполяция текущей скорости к целевой
         _angularVelocity += (_targetVelocity - _angularVelocity) * 0.08;
         setState(() {
           _bottleAngle = (_bottleAngle + _angularVelocity * 0.016) % (2 * math.pi);
@@ -172,12 +171,9 @@ class _GamePageState extends State<GamePage> with TickerProviderStateMixin {
     });
   }
 
-  /// Тап по колесу: звук «Дзинь», мгновенный сброс кулдауна, 2 оборота и парковка на 12 часах
   Future<void> _onWheelTapped() async {
-    // Разрешаем тап как в режиме ожидания, так и во время 15-секундного кулдауна
     if (_gameState != GameState.ready && _gameState != GameState.cooldown) return;
 
-    // Сбрасываем таймер ожидания раунда
     _cooldownTimer?.cancel();
 
     try {
@@ -185,6 +181,10 @@ class _GamePageState extends State<GamePage> with TickerProviderStateMixin {
       await _audioPlayer.play(AssetSource('glass.mp3'));
     } catch (_) {}
 
+    _resetToNeutralPosition();
+  }
+
+  void _resetToNeutralPosition() {
     _basePulses = _currentPulses;
     _lastPacketPulses = null;
     _angularVelocity = 0.0;
@@ -213,7 +213,7 @@ class _GamePageState extends State<GamePage> with TickerProviderStateMixin {
       setState(() {
         _bottleAngle = 0.0;
         _winningIndex = null;
-        _gameState = GameState.ready; // Сразу готовы к новому запуску спиннера
+        _gameState = GameState.ready;
       });
     });
   }
@@ -223,7 +223,6 @@ class _GamePageState extends State<GamePage> with TickerProviderStateMixin {
 
     _currentPulses = inboundValue;
 
-    // Первичная калибровка при холодном старте
     if (!_isBleCalibrated) {
       _basePulses = _currentPulses;
       _lastPacketPulses = _currentPulses;
@@ -231,15 +230,14 @@ class _GamePageState extends State<GamePage> with TickerProviderStateMixin {
       return;
     }
 
-    // Состояние готовности: ждем физического запуска спиннера
     if (_gameState == GameState.ready) {
       if (_players.length >= 2 && _currentPulses > _basePulses) {
         setState(() {
           _gameState = GameState.spinning;
           _winningIndex = null;
           _lastPacketPulses = _currentPulses;
-          _angularVelocity = 28.0;
-          _targetVelocity = 28.0;
+          _angularVelocity = 75.0;
+          _targetVelocity = 75.0;
         });
         _armSafetyTimeout();
       } else {
@@ -248,38 +246,36 @@ class _GamePageState extends State<GamePage> with TickerProviderStateMixin {
       return;
     }
 
-    // Состояние вращения
     if (_gameState == GameState.spinning) {
       final totalDelta = _currentPulses - _basePulses;
       if (totalDelta <= 0) return;
 
-      // МГНОВЕННАЯ ОСТАНОВКА: пришел дубликат пакета -> спиннер встал
       if (_lastPacketPulses != null && _currentPulses == _lastPacketPulses) {
         _safetyTimeoutTimer?.cancel();
         _onSpinnerStopped();
         return;
       }
 
-      // Вычисляем дельту импульсов между соседними пакетами для контроля скорости
       final int stepDelta = (_lastPacketPulses != null)
           ? (_currentPulses - _lastPacketPulses!)
           : totalDelta;
 
-      if (stepDelta >= 20) {
-        _targetVelocity = 28.0; // Максимальная скорость
+      if (stepDelta >= 25) {
+        _targetVelocity = 75.0;
+      } else if (stepDelta >= 18) {
+        _targetVelocity = 48.0;
       } else if (stepDelta >= 10) {
-        _targetVelocity = 16.0; // Средний темп
-      } else if (stepDelta >= 4) {
-        _targetVelocity = 7.0;  // Заметное замедление
+        _targetVelocity = 28.0;
+      } else if (stepDelta >= 5) {
+        _targetVelocity = 12.0;
       } else {
-        _targetVelocity = 2.5;  // Финальный выбег по инерции
+        _targetVelocity = 3.5;
       }
 
       setState(() {
         _lastPacketPulses = _currentPulses;
       });
 
-      // Страховочный таймер держим только на случай потери радиосвязи в полете
       _armSafetyTimeout();
     }
   }
@@ -305,15 +301,29 @@ class _GamePageState extends State<GamePage> with TickerProviderStateMixin {
     });
 
     if (totalDelta < 21) {
-      ScaffoldMessenger.of(context).showSnackBar(
+      ScaffoldMessenger.of(context).hideCurrentSnackBar();
+      ScaffoldMessenger.of(context)
+          .showSnackBar(
         SnackBar(
-          content: Text('Крутите сильнее! Всего $totalDelta об. (нужно ≥ 21)'),
-          backgroundColor: Colors.orange,
-          duration: const Duration(seconds: 3),
+          content: Text(
+            'Крутите сильнее! Всего $totalDelta об. (нужно ≥ 21)',
+            style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.white),
+          ),
+          backgroundColor: _brandBlue,
+          duration: const Duration(seconds: 2),
         ),
-      );
+      )
+          .closed
+          .then((_) async {
+        if (!mounted) return;
+        try {
+          await _audioPlayer.stop();
+          await _audioPlayer.play(AssetSource('glass.mp3'));
+        } catch (_) {}
+        _resetToNeutralPosition();
+      });
+
       setState(() {
-        _gameState = GameState.ready;
         _basePulses = _currentPulses;
         _lastPacketPulses = null;
         _angularVelocity = 0.0;
@@ -321,7 +331,6 @@ class _GamePageState extends State<GamePage> with TickerProviderStateMixin {
       return;
     }
 
-    // Расчет сектора победителя
     final int count = _players.length;
     final int winIdx = totalDelta % count;
     final double sweep = (2 * math.pi) / count;
@@ -334,11 +343,8 @@ class _GamePageState extends State<GamePage> with TickerProviderStateMixin {
       diff += 2 * math.pi;
     }
 
-    // Если угол до сектора совсем крошечный, даем один красивый круг на затухание
     final double crawlAngle = (diff < 0.4) ? (diff + 2 * math.pi) : diff;
     final double finalTarget = start + crawlAngle;
-
-    // Время доползания подстраивается под оставшийся угол (без рывка)
     final int durationMs = (1000 + (crawlAngle / (2 * math.pi) * 1200)).round();
 
     _settleAnimController?.dispose();
@@ -355,8 +361,14 @@ class _GamePageState extends State<GamePage> with TickerProviderStateMixin {
       });
     });
 
-    _settleAnimController!.forward().then((_) {
+    _settleAnimController!.forward().then((_) async {
       if (!mounted) return;
+
+      try {
+        await _audioPlayer.stop();
+        await _audioPlayer.play(AssetSource('win.mp3'));
+      } catch (_) {}
+
       setState(() {
         _bottleAngle = targetSectorAngle;
         _winningIndex = winIdx;
@@ -416,7 +428,10 @@ class _GamePageState extends State<GamePage> with TickerProviderStateMixin {
           children: [
             const Text(
               'Spin the Bottle',
-              style: TextStyle(fontWeight: FontWeight.bold),
+              style: TextStyle(
+                fontWeight: FontWeight.bold,
+                color: _brandBlue,
+              ),
             ),
             if (_appVersion.isNotEmpty)
               Text(
@@ -480,7 +495,6 @@ class _GamePageState extends State<GamePage> with TickerProviderStateMixin {
                 ),
               ),
             ),
-            // Фиксированная высота блока: колесо никогда не скачет
             SizedBox(
               height: 96,
               child: Center(child: _buildBottomStatusArea()),
@@ -505,7 +519,7 @@ class _GamePageState extends State<GamePage> with TickerProviderStateMixin {
               style: TextStyle(
                 fontSize: 24,
                 fontWeight: FontWeight.bold,
-                color: Colors.green,
+                color: _brandBlue,
               ),
             ),
             SizedBox(height: 4),
@@ -548,7 +562,7 @@ class _GamePageState extends State<GamePage> with TickerProviderStateMixin {
           children: [
             if (_winningIndex != null) ...[
               Text(
-                'Выбрано: $winnerName! 🎉',
+                'Выбрано: $winnerName!',
                 style: TextStyle(
                   fontSize: 24,
                   fontWeight: FontWeight.bold,
@@ -558,8 +572,8 @@ class _GamePageState extends State<GamePage> with TickerProviderStateMixin {
               const SizedBox(height: 4),
             ],
             Text(
-              'Следующий раунд через: $_cooldownSecondsRemaining с',
-              style: const TextStyle(fontSize: 15, color: Colors.blueGrey),
+              'Следующий раунд: $_cooldownSecondsRemaining с (или нажмите диск)',
+              style: const TextStyle(fontSize: 14, color: Colors.blueGrey),
             ),
           ],
         );
